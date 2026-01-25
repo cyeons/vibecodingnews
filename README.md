@@ -34,7 +34,7 @@ GitHub 리포지토리에 소스를 올린 후, **Settings > Secrets and variabl
 - `GEMINI_API_KEY`: Gemini API 키
 - `GMAIL_USER`: 뉴스레터를 보낼 Gmail 주소
 - `GMAIL_APP_PASSWORD`: 위 Gmail의 앱 비밀번호
-- `RECEIVER_EMAIL`: 뉴스레터를 받을 이메일 주소 (예: j333jw@naver.com)
+- `RECEIVER_EMAIL`: 뉴스레터를 받을 이메일 주소 (예: cyeons@gmail.com)
 
 ## ⏰ 실행 스케줄
 
@@ -43,3 +43,4 @@ GitHub 리포지토리에 소스를 올린 후, **Settings > Secrets and variabl
 ## 📄 라이선스
 
 MIT
+
