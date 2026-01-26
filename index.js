@@ -7,26 +7,50 @@ const nodemailer = require("nodemailer");
  * 1. Tavily 검색 (최신 바이브 코딩 정보 수집)
  */
 async function fetchVibeNews() {
-  console.log("🔍 Tavily에서 다양한 소스의 최신 뉴스를 검색 중입니다...");
+  console.log("🔍 Tavily에서 최근 24시간 뉴스를 검색 중입니다...");
   const tvly = tavily({ apiKey: process.env.TAVILY_API_KEY });
   
-  const today = new Date().toISOString().split('T')[0];
+  // 정확히 어제~오늘 사이의 뉴스만 가져오기 위해 날짜 계산
+  const now = new Date();
+  const yesterday = new Date(now.getTime() - (24 * 60 * 60 * 1000));
+  const dateLimit = yesterday.toISOString().split('T')[0];
   
-  // 1. 바이브 코딩 및 AI 코딩 에이전트 관련 통합 쿼리
-  const query = `"Vibe Coding" OR "AI Coding Agent" (site:news.hada.io OR site:reddit.com OR site:x.com OR site:news.ycombinator.com OR site:dev.to) after:${today}`;
+  // 1. 해외(Global) 쿼리: 바이브 코딩 + 일반 AI 활용/생산성
+  const globalQuery = `("Vibe Coding" OR "AI Coding Agent" OR "AI for productivity" OR "Generative AI tools") (site:news.hada.io OR site:reddit.com OR site:x.com OR site:news.ycombinator.com OR site:dev.to) after:${dateLimit}`;
   
+  // 2. 국내(Domestic) 쿼리: 바이브 코딩 + AI 업무 활용/교육 자동화 (커서 AI 제외)
+  const domesticQuery = `("바이브 코딩" OR "AI 코딩 에이전트" OR "AI 활용 능력" OR "AI 업무 자동화" OR "생성형 AI 교육") (site:geeknews.hada.io OR site:velog.io OR site:brunch.co.kr OR site:tistory.com OR site:fmkorea.com OR site:ruliweb.com OR site:clien.net OR site:news.naver.com OR site:news.daum.net OR site:chosun.com OR site:hani.co.kr OR site:joins.com) after:${dateLimit}`;
+
   try {
-    const response = await tvly.search(query, {
+    console.log("✈️ 해외 소식 검색 중...");
+    const globalResponse = await tvly.search(globalQuery, {
       searchDepth: "advanced",
-      maxResults: 15, // 더 넓은 범위에서 수집 후 Gemini가 선별하게 함
-      includeAnswer: true
+      maxResults: 15,
     });
 
-    if (!response.results || response.results.length === 0) {
+    console.log("🇰🇷 국내 소식 검색 중...");
+    const domesticResponse = await tvly.search(domesticQuery, {
+      searchDepth: "advanced",
+      maxResults: 15,
+    });
+
+    const results = [];
+    
+    if (globalResponse.results && globalResponse.results.length > 0) {
+      results.push("### [글로벌 소식]");
+      results.push(...globalResponse.results.map(r => `제목: ${r.title}\n출처: ${r.url}\n내용: ${r.content}`));
+    }
+
+    if (domesticResponse.results && domesticResponse.results.length > 0) {
+      results.push("\n### [국내 소식]");
+      results.push(...domesticResponse.results.map(r => `제목: ${r.title}\n출처: ${r.url}\n내용: ${r.content}`));
+    }
+
+    if (results.length === 0) {
       throw new Error("검색 결과가 없습니다.");
     }
 
-    return response.results.map(r => `제목: ${r.title}\n출처: ${r.url}\n내용: ${r.content}`).join("\n\n---\n\n");
+    return results.join("\n\n---\n\n");
   } catch (error) {
     console.error("Tavily 검색 실패:", error);
     throw error;
@@ -39,26 +63,38 @@ async function fetchVibeNews() {
 async function summarizeNews(rawText) {
   console.log("🤖 Gemini가 내용을 분석하여 요약 중입니다...");
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  // 가장 안정적이고 빠른 1.5-flash 모델 사용 권장
   const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" });
   
 const prompt = `
-당신은 초등교사이자 에듀테크 전문가입니다. 아래 데이터는 지난 24시간 동안 전 세계 커뮤니티(Reddit, X, GeekNews 등)에서 수집된 '바이브 코딩(Vibe Coding)' 및 AI 자동화 관련 게시글들입니다.
+당신은 기술의 흐름을 알기 쉽게 전달하는 테크 커뮤니케이터입니다. 아래 데이터는 지난 24시간 동안 수집된 '바이브 코딩(Vibe Coding)' 및 'AI 활용/생산성' 관련 뉴스입니다.
 
-이 뉴스레터를 읽는 선생님들은 전문 개발자가 아니며, 코드를 직접 읽거나 쓰지 못하더라도 AI와 대화하며 결과물을 만들어내는 '바이브 코딩'의 가능성에 주목하고 있습니다. 이 관점을 바탕으로 각 게시글(최대 10개)을 아주 상세하게 분석해 주세요.
+이 뉴스레터를 읽는 분들은 코딩을 전혀 모르는 교육 종사자들입니다. 최신 AI 기술이 가져올 미래의 변화와 그 가치를 포착하여, 복잡한 용어 없이 친절하고 상세하게 분석해 주세요.
 
 [중요 지시사항]
-1. 메일에서 가독성을 해치는 별표(**)나 기호(##) 같은 마크다운 형식을 절대 사용하지 마세요.
-2. 각 게시글마다 아래 정보를 풍성하게 담아주세요:
+1. [기사 선별 기준]: 정보의 가치와 파급력을 중심으로 가장 유의미한 소식을 엄선하세요. (내용 자체가 쉽거나 어려운지는 기준이 아닙니다.)
+   - 파급력: 기술적 혁신이 크거나 업무 방식을 근본적으로 바꿀 수 있는 중요한 소식인가?
+   - 혁신성: AI가 스스로 코드를 생성하거나 문제를 해결하는 '바이브 코딩'의 진보를 잘 보여주는가?
+   - 화제성: 커뮤니티(Reddit, HN, GeekNews 등)에서 높은 관심을 받으며 활발히 논의되는 주제인가?
+
+2. [비율 및 구성]:
+   - '바이브 코딩' 및 AI 에이전트 소식 70%, '일반 AI 도구 및 생산성' 소식 30% 비율로 구성하세요.
+   - [국내 소식] 섹션에서 유의미한 소식을 최소 3개 이상 반드시 포함해야 합니다. (전체 기사는 최대 10개)
+
+3. [내용 구성 지침]: 
+   - 대신 해당 기술의 구조, 작동 원리, 커뮤니티의 반응, 그리고 실제 개발 및 업무 현장에 미칠 파급력을 기술적인 관점에서 상세히 분석하세요.
+   - 전문 용어를 적절히 사용하되, 비전공자도 논리적 흐름을 이해할 수 있도록 명확하게 설명하세요.
+
+4. [가독성 설정]:
+   - 마크다운 기호(**, ## 등)를 사용하지 말고 줄바꿈과 공백을 활용하여 깔끔하게 작성하세요.
+
+5. [작성 형식]:
    - [글 제목]
    - (원본 링크)
-   - [심층 내용 분석]: 이 게시물이 왜 우리(코드를 모르는 선생님들)에게 중요한지, 이 소식이 비전공자의 코딩 방식에 어떤 변화를 가져올지 설명해 주세요. 단순히 요약하는 수준을 넘어, 해당 게시물의 핵심 논점이나 커뮤니티의 구체적인 반응, 그리고 이 기술이 우리 교실이나 업무 자동화에 미칠 영향력을 아주 자세히 기술해 주세요.
-3. 개별 게시글 사이에는 줄바꿈을 충분히 활용하여 시각적으로 명확히 구분해 주세요.
+   - [심층 내용 분석]: 글의 핵심 내용을 요약하는 것을 넘어, 이 기술이 왜 중요한지, 어떤 문제를 해결하는지, 그리고 향후 관련 산업이나 개발 생태계에 어떤 변화를 가져올지 전문적으로 기술하세요.
 
 [구성]
-- [오늘의 바이브 코딩 뉴스레터: 비전공자를 위한 AI 코딩 소식]
-- (각 게시글 심층 리스트 1 ~ 10)
-- [선생님들을 위한 오늘의 인사이트]
+- [오늘의 테크 리포트: 바이브 코딩 & AI 생산성 트렌드]
+- (엄선된 심층 리스트 1 ~ 10)
 
 [원문 데이터]
 ${rawText}
