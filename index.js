@@ -10,28 +10,25 @@ async function fetchVibeNews() {
   console.log("🔍 Tavily에서 최근 24시간 뉴스를 검색 중입니다...");
   const tvly = tavily({ apiKey: process.env.TAVILY_API_KEY });
   
-  // 정확히 어제~오늘 사이의 뉴스만 가져오기 위해 날짜 계산
-  const now = new Date();
-  const yesterday = new Date(now.getTime() - (24 * 60 * 60 * 1000));
-  const dateLimit = yesterday.toISOString().split('T')[0];
-  
   // 1. 해외(Global) 쿼리: 바이브 코딩 + 일반 AI 활용/생산성
-  const globalQuery = `("Vibe Coding" OR "AI Coding Agent" OR "AI for productivity" OR "Generative AI tools") (site:news.hada.io OR site:reddit.com OR site:x.com OR site:news.ycombinator.com OR site:dev.to) after:${dateLimit}`;
+  const globalQuery = `("Vibe Coding" OR "AI Coding Agent" OR "AI for productivity" OR "Generative AI tools") (site:news.hada.io OR site:reddit.com OR site:x.com OR site:news.ycombinator.com OR site:dev.to)`;
   
   // 2. 국내(Domestic) 쿼리: 바이브 코딩 + AI 업무 활용/교육 자동화 (커서 AI 제외)
-  const domesticQuery = `("바이브 코딩" OR "AI 코딩 에이전트" OR "AI 활용 능력" OR "AI 업무 자동화" OR "생성형 AI 교육") (site:geeknews.hada.io OR site:velog.io OR site:brunch.co.kr OR site:tistory.com OR site:fmkorea.com OR site:ruliweb.com OR site:clien.net OR site:news.naver.com OR site:news.daum.net OR site:chosun.com OR site:hani.co.kr OR site:joins.com) after:${dateLimit}`;
+  const domesticQuery = `("바이브 코딩" OR "AI 코딩 에이전트" OR "AI 활용 능력" OR "AI 업무 자동화" OR "생성형 AI 교육") (site:geeknews.hada.io OR site:velog.io OR site:brunch.co.kr OR site:tistory.com OR site:fmkorea.com OR site:ruliweb.com OR site:clien.net OR site:news.naver.com OR site:news.daum.net OR site:chosun.com OR site:hani.co.kr OR site:joins.com)`;
 
   try {
     console.log("✈️ 해외 소식 검색 중...");
     const globalResponse = await tvly.search(globalQuery, {
       searchDepth: "advanced",
       maxResults: 15,
+      days: 1, // 최근 1일 이내 뉴스 강조
     });
 
     console.log("🇰🇷 국내 소식 검색 중...");
     const domesticResponse = await tvly.search(domesticQuery, {
       searchDepth: "advanced",
       maxResults: 15,
+      days: 1, // 최근 1일 이내 뉴스 강조
     });
 
     const results = [];
@@ -78,10 +75,11 @@ const prompt = `
 
 2. [비율 및 구성]:
    - '바이브 코딩' 및 AI 에이전트 소식 70%, '일반 AI 도구 및 생산성' 소식 30% 비율로 구성하세요.
-   - [국내 소식] 섹션에서 유의미한 소식을 최소 3개 이상 반드시 포함해야 합니다. (전체 기사는 최대 10개)
+   - [국내 소식] 섹션에서 유의미한 최신 소식을 최소 "2개 이상" 반드시 포함해야 합니다. (전체 기사는 최대 10개)
+   - 만약 수집된 데이터 중 날짜가 현재 기준 24시간보다 오래된 소식이 섞여 있다면 제외하고, 오직 가장 따끈따끈한 뉴스만 선별하세요.
 
 3. [내용 구성 지침]: 
-   - 대신 해당 기술의 구조, 작동 원리, 커뮤니티의 반응, 그리고 실제 개발 및 업무 현장에 미칠 파급력을 기술적인 관점에서 상세히 분석하세요.
+   - 해당 기술의 구조, 작동 원리, 커뮤니티의 반응, 그리고 실제 개발 및 업무 현장에 미칠 파급력을 기술적인 관점에서 상세히 분석하세요.
    - 전문 용어를 적절히 사용하되, 비전공자도 논리적 흐름을 이해할 수 있도록 명확하게 설명하세요.
 
 4. [가독성 설정]:
