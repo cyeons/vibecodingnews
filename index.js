@@ -4,50 +4,61 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const nodemailer = require("nodemailer");
 
 /**
- * 1. Tavily 검색 (최신 바이브 코딩 정보 수집)
+ * 1. Tavily 검색 (뉴스 및 커뮤니티 소스 이원화)
  */
 async function fetchVibeNews() {
-  console.log("🔍 Tavily에서 최근 24시간 뉴스를 검색 중입니다...");
+  console.log("🔍 Tavily에서 뉴스 및 커뮤니티 소스를 수집 중입니다...");
   const tvly = tavily({ apiKey: process.env.TAVILY_API_KEY });
   
-  // 1. 해외(Global) 쿼리: 바이브 코딩 + 일반 AI 활용/생산성
-  const globalQuery = `("Vibe Coding" OR "AI Coding Agent" OR "AI for productivity" OR "Generative AI tools") (site:news.hada.io OR site:reddit.com OR site:x.com OR site:news.ycombinator.com OR site:dev.to)`;
+  const today = new Date().toISOString().split('T')[0];
   
-  // 2. 국내(Domestic) 쿼리: 바이브 코딩 + AI 업무 활용/교육 자동화 (커서 AI 제외)
-  const domesticQuery = `("바이브 코딩" OR "AI 코딩 에이전트" OR "AI 활용 능력" OR "AI 업무 자동화" OR "생성형 AI 교육") (site:geeknews.hada.io OR site:velog.io OR site:brunch.co.kr OR site:tistory.com OR site:fmkorea.com OR site:ruliweb.com OR site:clien.net OR site:news.naver.com OR site:news.daum.net OR site:chosun.com OR site:hani.co.kr OR site:joins.com)`;
+  // 1. 뉴스 토픽: 브레이킹 뉴스 및 공식 발표 중심
+  const newsQueries = [
+    `Breaking news official AI releases ${today}`,
+    `OpenAI Google Anthropic DeepMind new announcements last 24 hours`,
+    `Generative AI for developer productivity news ${today}`
+  ];
+
+  // 2. 일반 토픽: 기술 커뮤니티 (GeekNews, Hacker News) 중심
+  const communityQueries = [
+    `site:news.hada.io AI latest`,
+    `site:news.ycombinator.com AI latest`,
+    `Vibe Coding tools and trends February 2026`,
+    `Lovable.dev Cursor AI Claude Code update`
+  ];
 
   try {
-    console.log("✈️ 해외 소식 검색 중...");
-    const globalResponse = await tvly.search(globalQuery, {
-      searchDepth: "advanced",
-      maxResults: 15,
-      days: 1, // 최근 1일 이내 뉴스 강조
-    });
+    const newsPromises = newsQueries.map(query => 
+      tvly.search(query, { searchDepth: "advanced", topic: "news", maxResults: 15, days: 1 })
+    );
 
-    console.log("🇰🇷 국내 소식 검색 중...");
-    const domesticResponse = await tvly.search(domesticQuery, {
-      searchDepth: "advanced",
-      maxResults: 15,
-      days: 1, // 최근 1일 이내 뉴스 강조
-    });
+    const communityPromises = communityQueries.map(query => 
+      tvly.search(query, { searchDepth: "advanced", topic: "general", maxResults: 15, days: 1 })
+    );
 
-    const results = [];
+    const responses = await Promise.all([...newsPromises, ...communityPromises]);
     
-    if (globalResponse.results && globalResponse.results.length > 0) {
-      results.push("### [글로벌 소식]");
-      results.push(...globalResponse.results.map(r => `제목: ${r.title}\n출처: ${r.url}\n내용: ${r.content}`));
-    }
+    const urlSet = new Set();
+    const uniqueResults = [];
 
-    if (domesticResponse.results && domesticResponse.results.length > 0) {
-      results.push("\n### [국내 소식]");
-      results.push(...domesticResponse.results.map(r => `제목: ${r.title}\n출처: ${r.url}\n내용: ${r.content}`));
-    }
+    responses.forEach(resp => {
+      if (resp.results) {
+        resp.results.forEach(r => {
+          if (!urlSet.has(r.url)) {
+            urlSet.add(r.url);
+            uniqueResults.push(r);
+          }
+        });
+      }
+    });
 
-    if (results.length === 0) {
+    console.log(`✅ 총 ${uniqueResults.length}개의 정예 소스(뉴스+커뮤니티)를 발견했습니다.`);
+
+    if (uniqueResults.length === 0) {
       throw new Error("검색 결과가 없습니다.");
     }
 
-    return results.join("\n\n---\n\n");
+    return uniqueResults.map(r => `제목: ${r.title}\n출처: ${r.url}\n내용: ${r.content}`).join("\n\n---\n\n");
   } catch (error) {
     console.error("Tavily 검색 실패:", error);
     throw error;
@@ -58,41 +69,46 @@ async function fetchVibeNews() {
  * 2. Gemini 요약 (선생님 맞춤형 요약 생성)
  */
 async function summarizeNews(rawText) {
-  console.log("🤖 Gemini가 내용을 분석하여 요약 중입니다...");
+  console.log("🤖 Gemini가 신선도를 엄격히 검증하며 요약 중입니다...");
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
   const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" });
   
-const prompt = `
-당신은 기술의 흐름을 알기 쉽게 전달하는 테크 커뮤니케이터입니다. 아래 데이터는 지난 24시간 동안 수집된 '바이브 코딩(Vibe Coding)' 및 'AI 활용/생산성' 관련 뉴스입니다.
+  const todayStr = new Date().toLocaleDateString('ko-KR', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
 
-이 뉴스레터를 읽는 분들은 코딩을 전혀 모르는 교육 종사자들입니다. 최신 AI 기술이 가져올 미래의 변화와 그 가치를 포착하여, 복잡한 용어 없이 친절하고 상세하게 분석해 주세요.
+  const prompt = `
+오늘은 ${todayStr}입니다. 당신은 "오늘" 발생한 최신 기술 소식만 선별하는 뉴스 큐레이터입니다.
 
-[중요 지시사항]
-1. [기사 선별 기준]: 정보의 가치와 파급력을 중심으로 가장 유의미한 소식을 엄선하세요. (내용 자체가 쉽거나 어려운지는 기준이 아닙니다.)
-   - 파급력: 기술적 혁신이 크거나 업무 방식을 근본적으로 바꿀 수 있는 중요한 소식인가?
-   - 혁신성: AI가 스스로 코드를 생성하거나 문제를 해결하는 '바이브 코딩'의 진보를 잘 보여주는가?
-   - 화제성: 커뮤니티(Reddit, HN, GeekNews 등)에서 높은 관심을 받으며 활발히 논의되는 주제인가?
+[중요: 구형 정보 배제 지침]
+1. [날짜 대조]: 
+   - 기사 URL이나 내용에서 날짜를 찾아보세요. 2026년 2월 2일(또는 1일) 소식이 아닌 모든 정보는 과감히 버리세요.
+   - 특히 "Gemini 3", "Antigravity 공개" 등 이미 과거에 발표된 정보가 '최신'으로 둔갑하여 포함되어 있다면 절대 리포트에 넣지 마세요.
+   - URL에 /2025/, /2024/ 등이 포함되어 있거나 1월 중순 이전의 날짜가 있다면 즉시 제외하세요.
 
-2. [비율 및 구성]:
-   - '바이브 코딩' 및 AI 에이전트 소식 70%, '일반 AI 도구 및 생산성' 소식 30% 비율로 구성하세요.
-   - [국내 소식] 섹션에서 유의미한 최신 소식을 최소 "2개 이상" 반드시 포함해야 합니다. (전체 기사는 최대 10개)
-   - 만약 수집된 데이터 중 날짜가 현재 기준 24시간보다 오래된 소식이 섞여 있다면 제외하고, 오직 가장 따끈따끈한 뉴스만 선별하세요.
+2. [신규성 검증 및 수량 확대]:
+   - 어제까지의 기술 트렌드와 "무엇이 달라졌는지"가 명확한 소식만 남기세요.
+   - 신선도와 품질이 담보된다면 리스트를 10개 내외로 확장하여 구성하세요. (단, 품질이 낮거나 구형인 정보를 억지로 넣어 10개를 채우라는 의미는 아닙니다.)
+   - 만약 수집된 모든 기사가 구형이거나 가치가 없다면, "오늘의 유의미한 신규 소식이 없습니다"라고만 답변하세요.
 
-3. [내용 구성 지침]: 
-   - 해당 기술의 구조, 작동 원리, 커뮤니티의 반응, 그리고 실제 개발 및 업무 현장에 미칠 파급력을 기술적인 관점에서 상세히 분석하세요.
-   - 전문 용어를 적절히 사용하되, 비전공자도 논리적 흐름을 이해할 수 있도록 명확하게 설명하세요.
+3. [출처 우선순위]:
+   - 공식 블로그(OpenAI, Google 등) > Tech 소식지(GeekNews, HN, TechCrunch) 순으로 가중치를 둡니다.
 
-4. [가독성 설정]:
-   - 마크다운 기호(**, ## 등)를 사용하지 말고 줄바꿈과 공백을 활용하여 깔끔하게 작성하세요.
+4. [가독성 및 마크다운 금지]:
+   - **절대 주의**: 어떠한 마크다운 문법(특히 **글자 강조**)도 사용하지 마세요. 
+   - 제목이나 강조하고 싶은 부분은 별도의 기호 없이 줄바꿈과 대괄호[]만 활용하세요.
+   - 메일에서 텍스트가 깨지지 않도록 순수 텍스트와 줄바꿈만 사용하세요.
 
 5. [작성 형식]:
-   - [글 제목]
-   - (원본 링크)
-   - [심층 내용 분석]: 글의 핵심 내용을 요약하는 것을 넘어, 이 기술이 왜 중요한지, 어떤 문제를 해결하는지, 그리고 향후 관련 산업이나 개발 생태계에 어떤 변화를 가져올지 전문적으로 기술하세요.
+   - [제목]
+   - (URL)
+   - [Key Insight]: 본질적 변화와 파급력을 3~4문장으로 심층 분석하세요.
 
 [구성]
-- [오늘의 테크 리포트: 바이브 코딩 & AI 생산성 트렌드]
-- (엄선된 심층 리스트 1 ~ 10)
+- [오늘의 AI & 바이브 코딩 실시간 인사이트 리포트]
+- (검증된 정예 리스트)
 
 [원문 데이터]
 ${rawText}
@@ -132,7 +148,7 @@ async function sendEmail(summary) {
   const mailOptions = {
     from: `"바이브 코딩 뉴스레터" <${process.env.GMAIL_USER}>`,
     to: process.env.RECEIVER_EMAIL,
-    subject: `[Daily] ${today} 오늘의 바이브 코딩 & AI 팁`,
+    subject: `[Daily Insight] ${today} 최신 Tech 리포트`,
     text: summary,
     // HTML 형식을 사용하고 싶다면 아래 주석 해제 후 처리 가능
     // html: summary.replace(/\n/g, '<br>') 
@@ -166,9 +182,14 @@ async function main() {
     const summary = await summarizeNews(news);
     
     // 3. 이메일 발송
-    await sendEmail(summary);
+    // 요약 결과가 유의미할 때만 메일 발송
+    if (summary && summary.trim().length > 30) {
+      await sendEmail(summary);
+      console.log("🎉 오늘의 정예 리포트 발송 완료!");
+    } else {
+      console.log("⚠️ 발송할 만한 최신 유의미한 소식이 없어 발송을 스킵합니다.");
+    }
     
-    console.log("🎉 오늘의 모든 작업이 기분 좋게 완료되었습니다!");
   } catch (error) {
     console.error("❌ 작업 도중 오류가 발생했습니다:", error.message);
     process.exit(1);
