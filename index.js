@@ -1,75 +1,62 @@
 require('dotenv').config();
-const { tavily } = require("@tavily/core");
+const axios = require('axios');
+const cheerio = require('cheerio');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const nodemailer = require("nodemailer");
 
 /**
- * 1. Tavily 검색 (뉴스 및 커뮤니티 소스 이원화)
+ * 1. Geeknews에서 당일 최신 인기글 5개 수집
  */
-async function fetchVibeNews() {
-  console.log("🔍 Tavily에서 뉴스 및 커뮤니티 소스를 수집 중입니다...");
-  const tvly = tavily({ apiKey: process.env.TAVILY_API_KEY });
+async function fetchGeekNewsTop5() {
+  const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+  const url = `https://news.hada.io/past?day=${today}`;
   
-  const today = new Date().toISOString().split('T')[0];
+  console.log(`🔍 Geeknews에서 오늘의 인기글 (${today})을 수집 중입니다...`);
   
-  // 1. 뉴스 토픽: 브레이킹 뉴스 및 공식 발표 중심
-  const newsQueries = [
-    `Breaking news official AI releases ${today}`,
-    `OpenAI Google Anthropic DeepMind new announcements last 24 hours`,
-    `Generative AI for developer productivity news ${today}`
-  ];
-
-  // 2. 일반 토픽: 기술 커뮤니티 (GeekNews, Hacker News) 중심
-  const communityQueries = [
-    `site:news.hada.io AI latest`,
-    `site:news.ycombinator.com AI latest`,
-    `Vibe Coding tools and trends February 2026`,
-    `Lovable.dev Cursor AI Claude Code update`
-  ];
-
   try {
-    const newsPromises = newsQueries.map(query => 
-      tvly.search(query, { searchDepth: "advanced", topic: "news", maxResults: 15, days: 1 })
-    );
-
-    const communityPromises = communityQueries.map(query => 
-      tvly.search(query, { searchDepth: "advanced", topic: "general", maxResults: 15, days: 1 })
-    );
-
-    const responses = await Promise.all([...newsPromises, ...communityPromises]);
+    const response = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+      }
+    });
+    const $ = cheerio.load(response.data);
     
-    const urlSet = new Set();
-    const uniqueResults = [];
-
-    responses.forEach(resp => {
-      if (resp.results) {
-        resp.results.forEach(r => {
-          if (!urlSet.has(r.url)) {
-            urlSet.add(r.url);
-            uniqueResults.push(r);
-          }
-        });
+    const newsItems = [];
+    $('.topic_row').each((i, el) => {
+      const title = $(el).find('.topictitle a h1').text().trim();
+      const link = $(el).find('.topictitle a').attr('href');
+      const scoreText = $(el).find('.topicinfo span[id^="tp"]').text().trim();
+      const score = parseInt(scoreText) || 0;
+      const content = $(el).find('.topicdesc a').text().trim();
+      const topicId = $(el).find('.topicinfo a.u').attr('href');
+      const geeknewsLink = topicId ? 'https://news.hada.io/' + topicId : '';
+      
+      if (title && link) {
+        newsItems.push({ title, link, score, content, geeknewsLink });
       }
     });
 
-    console.log(`✅ 총 ${uniqueResults.length}개의 정예 소스(뉴스+커뮤니티)를 발견했습니다.`);
-
-    if (uniqueResults.length === 0) {
-      throw new Error("검색 결과가 없습니다.");
+    if (newsItems.length === 0) {
+      throw new Error("오늘의 Geeknews 데이터가 없습니다.");
     }
 
-    return uniqueResults.map(r => `제목: ${r.title}\n출처: ${r.url}\n내용: ${r.content}`).join("\n\n---\n\n");
+    // 점수 순으로 정렬 후 상위 5개 선택
+    const top5 = newsItems.sort((a, b) => b.score - a.score).slice(0, 5);
+    
+    console.log(`✅ ${top5.length}개의 정예 인기글을 선정했습니다.`);
+
+    return top5.map(r => `제목: ${r.title}\n원본 출처: ${r.link}\nGeeknews: ${r.geeknewsLink}\n인기 점수: ${r.score}\n내용 요약: ${r.content}`).join("\n\n---\n\n");
   } catch (error) {
-    console.error("Tavily 검색 실패:", error);
+    console.error("Geeknews 수집 실패:", error.message);
     throw error;
   }
 }
 
 /**
- * 2. Gemini 요약 (선생님 맞춤형 요약 생성)
+ * 2. Gemini 요약 (선정된 5개 소식에 대한 상세 기술 리포트)
  */
 async function summarizeNews(rawText) {
-  console.log("🤖 Gemini가 신선도를 엄격히 검증하며 요약 중입니다...");
+  console.log("🤖 Gemini가 선정된 인기글을 상세하게 분석 중입니다...");
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
   const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" });
   
@@ -80,37 +67,29 @@ async function summarizeNews(rawText) {
   });
 
   const prompt = `
-오늘은 ${todayStr}입니다. 당신은 "오늘" 발생한 최신 기술 소식만 선별하는 뉴스 큐레이터입니다.
+오늘은 ${todayStr}입니다. 당신은 "Geeknews"의 오늘의 인기 기술 뉴스 5개를 심층 분석하여 전달하는 전문 기술 큐레이터입니다.
 
-[중요: 구형 정보 배제 지침]
-1. [날짜 대조]: 
-   - 기사 URL이나 내용에서 날짜를 찾아보세요. 2026년 2월 2일(또는 1일) 소식이 아닌 모든 정보는 과감히 버리세요.
-   - 특히 "Gemini 3", "Antigravity 공개" 등 이미 과거에 발표된 정보가 '최신'으로 둔갑하여 포함되어 있다면 절대 리포트에 넣지 마세요.
-   - URL에 /2025/, /2024/ 등이 포함되어 있거나 1월 중순 이전의 날짜가 있다면 즉시 제외하세요.
-
-2. [신규성 검증 및 수량 확대]:
-   - 어제까지의 기술 트렌드와 "무엇이 달라졌는지"가 명확한 소식만 남기세요.
-   - 신선도와 품질이 담보된다면 리스트를 10개 내외로 확장하여 구성하세요. (단, 품질이 낮거나 구형인 정보를 억지로 넣어 10개를 채우라는 의미는 아닙니다.)
-   - 만약 수집된 모든 기사가 구형이거나 가치가 없다면, "오늘의 유의미한 신규 소식이 없습니다"라고만 답변하세요.
-
-3. [출처 우선순위]:
-   - 공식 블로그(OpenAI, Google 등) > Tech 소식지(GeekNews, HN, TechCrunch) 순으로 가중치를 둡니다.
-
-4. [가독성 및 마크다운 금지]:
-   - **절대 주의**: 어떠한 마크다운 문법(특히 **글자 강조**)도 사용하지 마세요. 
-   - 제목이나 강조하고 싶은 부분은 별도의 기호 없이 줄바꿈과 대괄호[]만 활용하세요.
-   - 메일에서 텍스트가 깨지지 않도록 순수 텍스트와 줄바꿈만 사용하세요.
-
-5. [작성 형식]:
+[지침]:
+1. 제공된 "원문 데이터"는 오늘 Geeknews에서 가장 반응이 좋았던 상위 5개 게시글입니다.
+2. 각 기사에 대해 다음 형식을 엄격히 지켜주세요:
    - [제목]
-   - (URL)
-   - [Key Insight]: 본질적 변화와 파급력을 3~4문장으로 심층 분석하세요.
+   - 링크: (Geeknews URL 제안)
+   - [심층 분석 리포트]: 
+     * 해당 기술/뉴스의 배경, 핵심 내용, 그리고 업계에 미칠 영향이나 기술적 가치를 포함하여 5~7문장 내외로 상세하게 설명하세요.
+     * 단순히 요약하는 것을 넘어, 왜 이 소식이 중요한지 인사이트를 담아주세요.
 
-[구성]
-- [오늘의 AI & 바이브 코딩 실시간 인사이트 리포트]
-- (검증된 정예 리스트)
+3. [주의 사항]:
+   - **인기 점수(Points)는 리포트에 포함하지 마세요.**
+   - **링크는 Geeknews 주소 하나만 제공하세요.** (원본 URL은 생략)
+   - **어떠한 마크다운 문법(특히 **글자 강조**)도 사용하지 마세요.**
+   - 제목이나 강조하고 싶은 부분은 대괄호[]와 줄바꿈만 활용하세요.
+   - 메일 가독성을 위해 순수 텍스트와 줄바꿈만 사용하세요.
 
-[원문 데이터]
+[구성]:
+- [오늘의 Geeknews 기술 인사이트 TOP 5 상세 리포트]
+- (${todayStr} 기준)
+
+[원문 데이터]:
 ${rawText}
 `;
 
@@ -169,14 +148,14 @@ async function sendEmail(summary) {
 async function main() {
   try {
     // 0. 환경 변수 체크
-    const requiredEnv = ['TAVILY_API_KEY', 'GEMINI_API_KEY', 'GMAIL_USER', 'GMAIL_APP_PASSWORD', 'RECEIVER_EMAIL'];
+    const requiredEnv = ['GEMINI_API_KEY', 'GMAIL_USER', 'GMAIL_APP_PASSWORD', 'RECEIVER_EMAIL'];
     const missing = requiredEnv.filter(k => !process.env[k]);
     if (missing.length > 0) {
       throw new Error(`누락된 환경 변수가 있습니다: ${missing.join(', ')}`);
     }
 
     // 1. 뉴스 수집
-    const news = await fetchVibeNews();
+    const news = await fetchGeekNewsTop5();
     
     // 2. 뉴스 요약
     const summary = await summarizeNews(news);
