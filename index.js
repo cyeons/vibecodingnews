@@ -7,8 +7,40 @@ const nodemailer = require("nodemailer");
 /**
  * 1. Geeknews에서 당일 최신 인기글 5개 수집
  */
+function getKstDate(date = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(date);
+}
+
+function parseGeekNewsItems(html) {
+  const $ = cheerio.load(html);
+  const newsItems = [];
+
+  $('.topic_row').each((i, el) => {
+    const titleAnchor = $(el).find('.topictitle > a').first();
+    const title = titleAnchor.find('.topic-title-heading, h2, h1').first().text().trim();
+    const link = titleAnchor.attr('href');
+    const scoreText = $(el).find('.topicinfo span[id^="tp"]').text().trim();
+    const score = parseInt(scoreText, 10) || 0;
+    const content = $(el).find('.topicdesc a').text().trim();
+    const topicPath = $(el).find('.topicdesc a[href^="topic?id="]').attr('href')
+      || $(el).find('.topicinfo a.u').attr('href');
+    const geeknewsLink = topicPath ? new URL(topicPath, 'https://news.hada.io/').href : '';
+
+    if (title && link) {
+      newsItems.push({ title, link, score, content, geeknewsLink });
+    }
+  });
+
+  return newsItems;
+}
+
 async function fetchGeekNewsTop5() {
-  const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+  const today = getKstDate();
   const url = `https://news.hada.io/past?day=${today}`;
   
   console.log(`🔍 Geeknews에서 오늘의 인기글 (${today})을 수집 중입니다...`);
@@ -19,22 +51,7 @@ async function fetchGeekNewsTop5() {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
       }
     });
-    const $ = cheerio.load(response.data);
-    
-    const newsItems = [];
-    $('.topic_row').each((i, el) => {
-      const title = $(el).find('.topictitle a h1').text().trim();
-      const link = $(el).find('.topictitle a').attr('href');
-      const scoreText = $(el).find('.topicinfo span[id^="tp"]').text().trim();
-      const score = parseInt(scoreText) || 0;
-      const content = $(el).find('.topicdesc a').text().trim();
-      const topicId = $(el).find('.topicinfo a.u').attr('href');
-      const geeknewsLink = topicId ? 'https://news.hada.io/' + topicId : '';
-      
-      if (title && link) {
-        newsItems.push({ title, link, score, content, geeknewsLink });
-      }
-    });
+    const newsItems = parseGeekNewsItems(response.data);
 
     if (newsItems.length === 0) {
       throw new Error("오늘의 Geeknews 데이터가 없습니다.");
@@ -175,4 +192,8 @@ async function main() {
   }
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = { getKstDate, parseGeekNewsItems };
